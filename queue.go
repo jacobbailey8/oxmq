@@ -1,4 +1,4 @@
-package pkg
+package oxmq
 
 import (
 	"context"
@@ -70,9 +70,6 @@ func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
 		// Add to waiting list
 		pipe.LPush(ctx, q.keyGen.Waiting(), job.ID)
 	}
-
-	// Add to state set
-	pipe.SAdd(ctx, q.keyGen.State(string(job.State)), job.ID)
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
