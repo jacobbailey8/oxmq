@@ -49,7 +49,12 @@ func NewJob(name string, data map[string]any, opts *JobOptions) (*Job, error) {
 		}
 	}
 
-	jobID := generateJobID(name)
+	var jobID string
+	if opts.CustomID != "" {
+		jobID = opts.CustomID
+	} else {
+		jobID = generateJobID(name)
+	}
 
 	return &Job{
 		ID:         jobID,
