@@ -1,3 +1,5 @@
+# OXMQ
+
 ## Installation
 
 Install **oxmq** via `go get`:
