@@ -15,7 +15,6 @@ const (
 	JobDelayed   JobState = "delayed"
 )
 
-// Job represents a job in the queue
 type Job struct {
 	ID         string         `json:"id"`
 	Name       string         `json:"name"`
@@ -31,7 +30,6 @@ type Job struct {
 	CustomID   string         `json:"custom_id,omitempty"`
 }
 
-// JobOptions represents options for a specific job
 type JobOptions struct {
 	MaxRetries int
 	Delay      time.Duration
@@ -39,8 +37,7 @@ type JobOptions struct {
 	CustomID   string
 }
 
-// NewJob creates a new job with the given parameters
-func NewJob(name string, data map[string]interface{}, opts *JobOptions) (*Job, error) {
+func NewJob(name string, data map[string]any, opts *JobOptions) (*Job, error) {
 	if name == "" {
 		return nil, ErrEmptyJobName
 	}
@@ -77,26 +74,22 @@ func (j *Job) FromJSON(data []byte) error {
 	return json.Unmarshal(data, j)
 }
 
-// IsRetryable returns true if the job can be retried
 func (j *Job) IsRetryable() bool {
 	return j.Attempts < j.MaxRetries
 }
 
-// MarkFailed marks the job as failed with the given error
 func (j *Job) MarkFailed(err error) {
 	j.State = JobFailed
 	j.Error = err.Error()
 	j.UpdatedAt = time.Now()
 }
 
-// MarkCompleted marks the job as completed
 func (j *Job) MarkCompleted() {
 	j.State = JobCompleted
 	j.Error = ""
 	j.UpdatedAt = time.Now()
 }
 
-// IncrementAttempts increments the job attempt counter
 func (j *Job) IncrementAttempts() {
 	j.Attempts++
 	j.UpdatedAt = time.Now()

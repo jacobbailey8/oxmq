@@ -9,14 +9,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Queue represents a job queue
 type Queue struct {
 	name   string
 	client *redis.Client
 	keyGen *keys.KeyGenerator
 }
 
-// QueueStats represents queue statistics
 type QueueStats struct {
 	Waiting   int64 `json:"waiting"`
 	Active    int64 `json:"active"`
@@ -25,7 +23,6 @@ type QueueStats struct {
 	Delayed   int64 `json:"delayed"`
 }
 
-// NewQueue creates a new queue instance
 func NewQueue(name string, client *redis.Client) *Queue {
 	return &Queue{
 		name:   name,
@@ -34,7 +31,7 @@ func NewQueue(name string, client *redis.Client) *Queue {
 	}
 }
 
-// Add adds a new job to the queue
+// Adds a new job to the queue based on explicit parameters
 func (q *Queue) Add(ctx context.Context, name string, data map[string]any, opts *JobOptions) (*Job, error) {
 
 	job, err := NewJob(name, data, opts)
@@ -45,7 +42,7 @@ func (q *Queue) Add(ctx context.Context, name string, data map[string]any, opts 
 	return q.addJob(ctx, job)
 }
 
-// AddJob adds an existing job to the queue
+// Adds an existing job to the queue
 func (q *Queue) AddJob(ctx context.Context, job *Job) (*Job, error) {
 	return q.addJob(ctx, job)
 }
@@ -85,7 +82,6 @@ func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
 	return job, nil
 }
 
-// GetJob retrieves a job by ID
 func (q *Queue) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	data, err := q.client.HGet(ctx, q.keyGen.Job(jobID), "data").Result()
 	if err != nil {
@@ -104,7 +100,7 @@ func (q *Queue) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	return &job, nil
 }
 
-// GetJobs returns jobs by state
+// Returns jobs by state
 func (q *Queue) GetJobs(ctx context.Context, state JobState, start, stop int64) ([]*Job, error) {
 	var jobIDs []string
 	var err error
@@ -147,12 +143,12 @@ func (q *Queue) GetFailed(ctx context.Context, start, stop int64) ([]*Job, error
 	return q.GetJobs(ctx, JobFailed, start, stop)
 }
 
-// Count returns the number of jobs in a specific state
+// Returns the number of jobs in a specific state
 func (q *Queue) Count(ctx context.Context, state JobState) (int64, error) {
 	return q.client.SCard(ctx, q.keyGen.State(string(state))).Result()
 }
 
-// GetStats returns queue statistics
+// Returns number of jobs in each state
 func (q *Queue) GetStats(ctx context.Context) (*QueueStats, error) {
 	states := []JobState{JobWaiting, JobActive, JobCompleted, JobFailed, JobDelayed}
 	counts := make([]int64, len(states))
@@ -182,7 +178,7 @@ func (q *Queue) GetStats(ctx context.Context) (*QueueStats, error) {
 	}, nil
 }
 
-// Clean removes jobs older than the specified duration
+// Removes jobs older than the specified duration
 func (q *Queue) Clean(ctx context.Context, maxAge time.Duration, state JobState, limit int) (int, error) {
 	jobs, err := q.GetJobs(ctx, state, 0, int64(limit))
 	if err != nil {
@@ -204,7 +200,6 @@ func (q *Queue) Clean(ctx context.Context, maxAge time.Duration, state JobState,
 	return cleaned, nil
 }
 
-// RemoveJob completely removes a job from the queue
 func (q *Queue) RemoveJob(ctx context.Context, jobID string) error {
 	job, err := q.GetJob(ctx, jobID)
 	if err != nil {
@@ -224,71 +219,68 @@ func (q *Queue) RemoveJob(ctx context.Context, jobID string) error {
 	return err
 }
 
-// moveJobToState moves a job from one state to another
-func (q *Queue) moveJobToState(ctx context.Context, jobID string, fromState, toState JobState) error {
-	pipe := q.client.Pipeline()
+// // func (q *Queue) moveJobToState(ctx context.Context, jobID string, fromState, toState JobState) error {
+// // 	pipe := q.client.Pipeline()
 
-	// Remove from old state
-	if fromState != "" {
-		pipe.SRem(ctx, q.keyGen.State(string(fromState)), jobID)
-	}
+// // 	// Remove from old state
+// // 	if fromState != "" {
+// // 		pipe.SRem(ctx, q.keyGen.State(string(fromState)), jobID)
+// // 	}
 
-	// Add to new state
-	pipe.SAdd(ctx, q.keyGen.State(string(toState)), jobID)
+// // 	// Add to new state
+// // 	pipe.SAdd(ctx, q.keyGen.State(string(toState)), jobID)
 
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return err
-	}
+// // 	_, err := pipe.Exec(ctx)
+// // 	if err != nil {
+// // 		return err
+// // 	}
 
-	// Update job state
-	job, err := q.GetJob(ctx, jobID)
-	if err != nil {
-		return err
-	}
+// 	// Update job state
+// 	job, err := q.GetJob(ctx, jobID)
+// 	if err != nil {
+// 		return err
+// 	}
 
-	job.State = toState
-	job.UpdatedAt = time.Now()
+// 	job.State = toState
+// 	job.UpdatedAt = time.Now()
 
-	return q.updateJob(ctx, job)
-}
+// 	return q.updateJob(ctx, job)
+// }
 
-// updateJob updates job data in Redis
-func (q *Queue) updateJob(ctx context.Context, job *Job) error {
-	jobData, err := job.ToJSON()
-	if err != nil {
-		return err
-	}
+// // Updates job data in Redis
+// func (q *Queue) updateJob(ctx context.Context, job *Job) error {
+// 	jobData, err := job.ToJSON()
+// 	if err != nil {
+// 		return err
+// 	}
 
-	return q.client.HSet(ctx, q.keyGen.Job(job.ID), "data", jobData).Err()
-}
+// 	return q.client.HSet(ctx, q.keyGen.Job(job.ID), "data", jobData).Err()
+// }
 
-// Pause pauses the queue (prevents new jobs from being processed)
-func (q *Queue) Pause(ctx context.Context) error {
-	return q.client.Set(ctx, q.keyGen.Paused(), "1", 0).Err()
-}
+// // Pauses the queue (prevents new jobs from being processed)
+// func (q *Queue) Pause(ctx context.Context) error {
+// 	return q.client.Set(ctx, q.keyGen.Paused(), "1", 0).Err()
+// }
 
-// Resume resumes the queue
-func (q *Queue) Resume(ctx context.Context) error {
-	return q.client.Del(ctx, q.keyGen.Paused()).Err()
-}
+// func (q *Queue) Resume(ctx context.Context) error {
+// 	return q.client.Del(ctx, q.keyGen.Paused()).Err()
+// }
 
-// IsPaused returns true if the queue is paused
-func (q *Queue) IsPaused(ctx context.Context) (bool, error) {
-	result := q.client.Exists(ctx, q.keyGen.Paused())
-	return result.Val() > 0, result.Err()
-}
+// func (q *Queue) IsPaused(ctx context.Context) (bool, error) {
+// 	result := q.client.Exists(ctx, q.keyGen.Paused())
+// 	return result.Val() > 0, result.Err()
+// }
 
-// Close closes the queue and cleans up resources
-func (q *Queue) Close() error {
-	// Implement any cleanup logic here
-	return nil
-}
+// // Closes the queue and cleans up resources
+// func (q *Queue) Close() error {
+// 	// Implement any cleanup logic here
+// 	return nil
+// }
 
 // Removes all jobs in waiting or delayed state
-func (q *Queue) Drain() error
+// func (q *Queue) Drain() error
 
-func (q *Queue) Obliterate() error
+// func (q *Queue) Obliterate() error
 
 // type Queue struct {
 // 	name          string
