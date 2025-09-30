@@ -31,6 +31,14 @@ func NewQueue(name string, client *redis.Client) *Queue {
 	}
 }
 
+func (q *Queue) Client() *redis.Client {
+	return q.client
+}
+
+func (q *Queue) KeyGen() *keys.KeyGenerator {
+	return q.keyGen
+}
+
 // Adds a new job to the queue based on explicit parameters
 func (q *Queue) Add(ctx context.Context, name string, data map[string]any, opts *JobOptions) (*Job, error) {
 
@@ -42,18 +50,13 @@ func (q *Queue) Add(ctx context.Context, name string, data map[string]any, opts 
 	return q.addJob(ctx, job)
 }
 
-// Adds an existing job to the queue
-func (q *Queue) AddJob(ctx context.Context, job *Job) (*Job, error) {
-	return q.addJob(ctx, job)
-}
-
 func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
 	jobData, err := job.ToJSON()
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal job: %w", err)
 	}
 
-	pipe := q.client.Pipeline()
+	pipe := q.client.TxPipeline()
 
 	// Store job data
 	pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", jobData)
@@ -67,8 +70,13 @@ func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
 		})
 		job.State = JobDelayed
 	} else {
-		// Add to waiting list
-		pipe.LPush(ctx, q.keyGen.Waiting(), job.ID)
+		// Add to waiting list with priority: timestamp appended to priority score
+		// this will respect priority score primarily and preserve order by insertion for ties
+		score := float64(job.Priority)*1e12 + float64(time.Now().UnixNano())
+		pipe.ZAdd(ctx, q.keyGen.Waiting(), redis.Z{
+			Score:  score,
+			Member: job.ID,
+		})
 	}
 
 	_, err = pipe.Exec(ctx)
@@ -97,26 +105,42 @@ func (q *Queue) GetJob(ctx context.Context, jobID string) (*Job, error) {
 	return &job, nil
 }
 
-// Returns jobs by state
+// Returns jobs by state.
+// - For waiting/delayed (sorted sets), it uses ZRANGE or ZRANGEBYSCORE.
+// - For other states (sets), it uses SMEMBERS or SRANDMEMBERN.
 func (q *Queue) GetJobs(ctx context.Context, state JobState, start, stop int64) ([]*Job, error) {
 	var jobIDs []string
 	var err error
 
-	if start < 0 || stop < 0 {
-		jobIDs, err = q.client.SMembers(ctx, q.keyGen.State(string(state))).Result()
-	} else {
-		jobIDs, err = q.client.SRandMemberN(ctx, q.keyGen.State(string(state)), stop-start+1).Result()
+	switch state {
+	case JobWaiting, JobDelayed:
+		// For sorted sets, preserve score ordering
+		if start < 0 || stop < 0 {
+			// Default to all
+			jobIDs, err = q.client.ZRange(ctx, q.keyGen.State(string(state)), 0, -1).Result()
+		} else {
+			jobIDs, err = q.client.ZRange(ctx, q.keyGen.State(string(state)), start, stop).Result()
+		}
+	default:
+		// For sets (unordered states like active, completed, failed)
+		if start < 0 || stop < 0 {
+			jobIDs, err = q.client.SMembers(ctx, q.keyGen.State(string(state))).Result()
+		} else {
+			jobIDs, err = q.client.SRandMemberN(ctx, q.keyGen.State(string(state)), stop-start+1).Result()
+		}
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch job IDs for state %s: %w", state, err)
 	}
 
+	// Fetch job objects
 	jobs := make([]*Job, 0, len(jobIDs))
 	for _, jobID := range jobIDs {
 		job, err := q.GetJob(ctx, jobID)
 		if err != nil {
-			continue // Skip jobs that can't be retrieved
+			// Skip corrupted/missing jobs
+			continue
 		}
 		jobs = append(jobs, job)
 	}
@@ -140,21 +164,31 @@ func (q *Queue) GetFailed(ctx context.Context, start, stop int64) ([]*Job, error
 	return q.GetJobs(ctx, JobFailed, start, stop)
 }
 
-// Returns the number of jobs in a specific state
+// Returns the number of jobs in a specific state.
 func (q *Queue) Count(ctx context.Context, state JobState) (int64, error) {
-	return q.client.SCard(ctx, q.keyGen.State(string(state))).Result()
+	switch state {
+	case JobWaiting, JobDelayed:
+		return q.client.ZCard(ctx, q.keyGen.State(string(state))).Result()
+	default:
+		return q.client.SCard(ctx, q.keyGen.State(string(state))).Result()
+	}
 }
 
-// Returns number of jobs in each state
+// GetStats returns the number of jobs in each state
 func (q *Queue) GetStats(ctx context.Context) (*QueueStats, error) {
 	states := []JobState{JobWaiting, JobActive, JobCompleted, JobFailed, JobDelayed}
 	counts := make([]int64, len(states))
 
-	pipe := q.client.Pipeline()
+	pipe := q.client.TxPipeline()
 	cmds := make([]*redis.IntCmd, len(states))
 
 	for i, state := range states {
-		cmds[i] = pipe.SCard(ctx, q.keyGen.State(string(state)))
+		switch state {
+		case JobWaiting, JobDelayed:
+			cmds[i] = pipe.ZCard(ctx, q.keyGen.State(string(state)))
+		default:
+			cmds[i] = pipe.SCard(ctx, q.keyGen.State(string(state)))
+		}
 	}
 
 	_, err := pipe.Exec(ctx)
@@ -203,105 +237,178 @@ func (q *Queue) RemoveJob(ctx context.Context, jobID string) error {
 		return err
 	}
 
-	pipe := q.client.Pipeline()
+	pipe := q.client.TxPipeline()
 
-	// Remove from all possible locations
-	pipe.SRem(ctx, q.keyGen.State(string(job.State)), jobID)
-	pipe.LRem(ctx, q.keyGen.Waiting(), 1, jobID)
-	pipe.LRem(ctx, q.keyGen.Active(), 1, jobID)
-	pipe.ZRem(ctx, q.keyGen.Delayed(), jobID)
+	switch job.State {
+	case JobWaiting, JobDelayed:
+		pipe.ZRem(ctx, q.keyGen.State(string(job.State)), jobID)
+	default:
+		pipe.SRem(ctx, q.keyGen.State(string(job.State)), jobID)
+	}
+
 	pipe.Del(ctx, q.keyGen.Job(jobID))
 
 	_, err = pipe.Exec(ctx)
 	return err
 }
 
-// // func (q *Queue) moveJobToState(ctx context.Context, jobID string, fromState, toState JobState) error {
-// // 	pipe := q.client.Pipeline()
+func (q *Queue) moveJobToState(ctx context.Context, jobID string, fromState, toState JobState) error {
 
-// // 	// Remove from old state
-// // 	if fromState != "" {
-// // 		pipe.SRem(ctx, q.keyGen.State(string(fromState)), jobID)
-// // 	}
+	const maxRetries = 5
 
-// // 	// Add to new state
-// // 	pipe.SAdd(ctx, q.keyGen.State(string(toState)), jobID)
+	for i := 0; i < maxRetries; i++ {
+		// Watch makes the entire transaction atomic in redis
+		err := q.client.Watch(ctx, func(tx *redis.Tx) error {
+			jobData, err := tx.HGet(ctx, q.keyGen.Job(jobID), "data").Result()
+			if err != nil {
+				return err
+			}
+			var job Job
+			if err := job.FromJSON([]byte(jobData)); err != nil {
+				return err
+			}
 
-// // 	_, err := pipe.Exec(ctx)
-// // 	if err != nil {
-// // 		return err
-// // 	}
+			if job.State != fromState {
+				return fmt.Errorf("expected job in %s but found %s", fromState, job.State)
+			}
 
-// 	// Update job state
-// 	job, err := q.GetJob(ctx, jobID)
-// 	if err != nil {
-// 		return err
-// 	}
+			pipe := tx.TxPipeline()
 
-// 	job.State = toState
-// 	job.UpdatedAt = time.Now()
+			// Remove from old state
+			if fromState != "" {
+				switch fromState {
+				case JobWaiting, JobDelayed:
+					pipe.ZRem(ctx, q.keyGen.State(string(fromState)), jobID)
+				default:
+					pipe.SRem(ctx, q.keyGen.State(string(fromState)), jobID)
+				}
+			}
 
-// 	return q.updateJob(ctx, job)
-// }
+			// Places job in correct state set/zset
+			switch toState {
+			case JobWaiting:
+				score := float64(job.Priority)*1e12 + float64(time.Now().UnixNano())
+				pipe.ZAdd(ctx, q.keyGen.Waiting(), redis.Z{
+					Score:  score,
+					Member: job.ID,
+				})
+			case JobDelayed:
+				delayedUntil := time.Now().Add(job.Delay).Unix()
+				pipe.ZAdd(ctx, q.keyGen.Delayed(), redis.Z{
+					Score:  float64(delayedUntil),
+					Member: job.ID,
+				})
+			default:
+				pipe.SAdd(ctx, q.keyGen.State(string(toState)), jobID)
+			}
 
-// // Updates job data in Redis
-// func (q *Queue) updateJob(ctx context.Context, job *Job) error {
-// 	jobData, err := job.ToJSON()
-// 	if err != nil {
-// 		return err
-// 	}
+			job.State = toState
+			job.UpdatedAt = time.Now()
 
-// 	return q.client.HSet(ctx, q.keyGen.Job(job.ID), "data", jobData).Err()
-// }
+			// Update job in hash
+			newJobData, err := job.ToJSON()
+			if err != nil {
+				return err
+			}
+			pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", newJobData)
 
-// // Pauses the queue (prevents new jobs from being processed)
-// func (q *Queue) Pause(ctx context.Context) error {
-// 	return q.client.Set(ctx, q.keyGen.Paused(), "1", 0).Err()
-// }
+			_, err = pipe.Exec(ctx)
+			return err
+		}, q.keyGen.Job(jobID))
 
-// func (q *Queue) Resume(ctx context.Context) error {
-// 	return q.client.Del(ctx, q.keyGen.Paused()).Err()
-// }
+		if err == nil {
+			return nil
+		}
 
-// func (q *Queue) IsPaused(ctx context.Context) (bool, error) {
-// 	result := q.client.Exists(ctx, q.keyGen.Paused())
-// 	return result.Val() > 0, result.Err()
-// }
+		if err == redis.TxFailedErr {
+			// Another client modified the key, retry after a small backoff
+			time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+			continue
+		}
 
-// // Closes the queue and cleans up resources
-// func (q *Queue) Close() error {
-// 	// Implement any cleanup logic here
-// 	return nil
-// }
+		// Any other error is fatal
+		return err
+	}
 
-// Removes all jobs in waiting or delayed state
-// func (q *Queue) Drain() error
+	return fmt.Errorf("moveJobToState failed after %d retries due to concurrent modifications", maxRetries)
+}
 
-// func (q *Queue) Obliterate() error
+// Pauses the queue (prevents new jobs from being processed)
+func (q *Queue) Pause(ctx context.Context) error {
+	return q.client.Set(ctx, q.keyGen.Paused(), "1", 0).Err()
+}
 
-// type Queue struct {
-// 	name          string
-// 	jobQueue      safePriorityQueue
-// 	jobSet        set
-// 	mu            sync.Mutex
-// 	keepCompleted int
-// 	keepFailed    int
-// }
+func (q *Queue) Resume(ctx context.Context) error {
+	return q.client.Del(ctx, q.keyGen.Paused()).Err()
+}
 
-// func (q *Queue) AddJobs(jobs []*Job) {
-// 	q.mu.Lock()
-// 	defer q.mu.Unlock()
-// 	q.jobQueue = append(q.jobQueue, jobs...)
-// }
+func (q *Queue) IsPaused(ctx context.Context) (bool, error) {
+	result := q.client.Exists(ctx, q.keyGen.Paused())
+	return result.Val() > 0, result.Err()
+}
 
-// func (q *Queue) GetPrioritizedJobs() []*Job {
-// 	prioritizedJobs := make([]*Job, 0)
-// 	q.mu.Lock()
-// 	defer q.mu.Unlock()
-// 	for _, job := range q.jobQueue {
-// 		if job.priority > 0 {
-// 			prioritizedJobs = append(prioritizedJobs, job)
-// 		}
-// 	}
-// 	return prioritizedJobs
-// }
+// Removes all jobs in waiting or delayed state.
+func (q *Queue) Drain(ctx context.Context) error {
+	pipe := q.client.TxPipeline()
+
+	// Fetch all waiting jobs
+	waitingIDs, err := q.client.ZRange(ctx, q.keyGen.Waiting(), 0, -1).Result()
+	if err != nil && err != redis.Nil {
+		return fmt.Errorf("failed to fetch waiting jobs: %w", err)
+	}
+
+	// Fetch all delayed jobs
+	delayedIDs, err := q.client.ZRange(ctx, q.keyGen.Delayed(), 0, -1).Result()
+	if err != nil && err != redis.Nil {
+		return fmt.Errorf("failed to fetch delayed jobs: %w", err)
+	}
+
+	allIDs := append(waitingIDs, delayedIDs...)
+
+	// Remove job hashes
+	for _, jobID := range allIDs {
+		pipe.Del(ctx, q.keyGen.Job(jobID))
+	}
+
+	// Clear the waiting and delayed sets
+	pipe.Del(ctx, q.keyGen.Waiting())
+	pipe.Del(ctx, q.keyGen.Delayed())
+
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to drain queue: %w", err)
+	}
+
+	return nil
+}
+
+func (q *Queue) Obliterate(ctx context.Context) error {
+	pipe := q.client.TxPipeline()
+
+	states := []JobState{JobWaiting, JobDelayed, JobActive, JobCompleted, JobFailed}
+	var allJobKeys []string
+
+	// Get all jobs in each state
+	for _, state := range states {
+		jobs, err := q.GetJobs(ctx, state, -1, -1)
+		if err != nil {
+			return err
+		}
+		for _, job := range jobs {
+			allJobKeys = append(allJobKeys, q.keyGen.Job(job.ID))
+		}
+		pipe.Del(ctx, q.keyGen.State(string(state)))
+	}
+
+	// Delete all job hashes
+	if len(allJobKeys) > 0 {
+		pipe.Del(ctx, allJobKeys...)
+	}
+
+	// Delete metadata & paused flag
+	pipe.Del(ctx, q.keyGen.Meta())
+	pipe.Del(ctx, q.keyGen.Paused())
+
+	_, err := pipe.Exec(ctx)
+	return err
+}

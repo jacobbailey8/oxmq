@@ -24,7 +24,7 @@ import (
     "time"
 
     "github.com/redis/go-redis/v9"
-    "github.com/jacobbailey/oxmq/pkg/oxmq"
+    "github.com/jacobbailey/oxmq"
 )
 
 func main() {
