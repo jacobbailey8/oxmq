@@ -13,9 +13,11 @@ func setupTestQueue(t *testing.T) *oxmq.Queue {
 		Addr: "localhost:6379",
 		DB:   15, // test DB
 	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Flush before each test
-	if err := client.FlushDB(context.Background()).Err(); err != nil {
+	if err := client.FlushDB(ctx).Err(); err != nil {
 		t.Fatalf("failed to flush Redis: %v", err)
 	}
 
@@ -24,7 +26,8 @@ func setupTestQueue(t *testing.T) *oxmq.Queue {
 
 func TestQueue_AddAndGetJob(t *testing.T) {
 	q := setupTestQueue(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	job, err := q.Add(ctx, "email", map[string]any{"to": "user@example.com"}, &oxmq.JobOptions{})
 	if err != nil {
@@ -39,10 +42,12 @@ func TestQueue_AddAndGetJob(t *testing.T) {
 	if fetched.Name != "email" {
 		t.Errorf("expected name %s, got %s", "email", fetched.Name)
 	}
+
 }
 func TestQueue_PriorityOrder(t *testing.T) {
 	q := setupTestQueue(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Add jobs with different priorities
 	jobHigh, err := q.Add(ctx, "high", map[string]any{}, &oxmq.JobOptions{Priority: 0})

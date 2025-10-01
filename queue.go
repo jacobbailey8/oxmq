@@ -252,86 +252,200 @@ func (q *Queue) RemoveJob(ctx context.Context, jobID string) error {
 	return err
 }
 
-func (q *Queue) moveJobToState(ctx context.Context, jobID string, fromState, toState JobState) error {
-
-	const maxRetries = 5
-
-	for i := 0; i < maxRetries; i++ {
-		// Watch makes the entire transaction atomic in redis
-		err := q.client.Watch(ctx, func(tx *redis.Tx) error {
-			jobData, err := tx.HGet(ctx, q.keyGen.Job(jobID), "data").Result()
-			if err != nil {
-				return err
-			}
-			var job Job
-			if err := job.FromJSON([]byte(jobData)); err != nil {
-				return err
-			}
-
-			if job.State != fromState {
-				return fmt.Errorf("expected job in %s but found %s", fromState, job.State)
-			}
-
-			pipe := tx.TxPipeline()
-
-			// Remove from old state
-			if fromState != "" {
-				switch fromState {
-				case JobWaiting, JobDelayed:
-					pipe.ZRem(ctx, q.keyGen.State(string(fromState)), jobID)
-				default:
-					pipe.SRem(ctx, q.keyGen.State(string(fromState)), jobID)
-				}
-			}
-
-			// Places job in correct state set/zset
-			switch toState {
-			case JobWaiting:
-				score := float64(job.Priority)*1e12 + float64(time.Now().UnixNano())
-				pipe.ZAdd(ctx, q.keyGen.Waiting(), redis.Z{
-					Score:  score,
-					Member: job.ID,
-				})
-			case JobDelayed:
-				delayedUntil := time.Now().Add(job.Delay).Unix()
-				pipe.ZAdd(ctx, q.keyGen.Delayed(), redis.Z{
-					Score:  float64(delayedUntil),
-					Member: job.ID,
-				})
-			default:
-				pipe.SAdd(ctx, q.keyGen.State(string(toState)), jobID)
-			}
-
-			job.State = toState
-			job.UpdatedAt = time.Now()
-
-			// Update job in hash
-			newJobData, err := job.ToJSON()
-			if err != nil {
-				return err
-			}
-			pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", newJobData)
-
-			_, err = pipe.Exec(ctx)
-			return err
-		}, q.keyGen.Job(jobID))
-
-		if err == nil {
-			return nil
-		}
-
-		if err == redis.TxFailedErr {
-			// Another client modified the key, retry after a small backoff
-			time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
-			continue
-		}
-
-		// Any other error is fatal
-		return err
+func (q *Queue) PlaceJobInActive(ctx context.Context, jobID string) (*Job, error) {
+	pipe := q.client.TxPipeline()
+	var job Job
+	jobData, err := q.client.HGet(ctx, q.keyGen.Job(jobID), "data").Result()
+	if err != nil {
+		return nil, err
+	}
+	if err := job.FromJSON([]byte(jobData)); err != nil {
+		return nil, err
 	}
 
-	return fmt.Errorf("moveJobToState failed after %d retries due to concurrent modifications", maxRetries)
+	if job.State != JobWaiting {
+		return nil, fmt.Errorf("expected job to be in waiting state, was in %s", job.State)
+	}
+
+	// update job data
+	job.UpdatedAt = time.Now()
+	job.State = JobActive
+
+	// Update job in hash
+	newJobData, err := job.ToJSON()
+	if err != nil {
+		return nil, err
+	}
+	pipe.HSet(ctx, q.keyGen.Job(jobID), "data", newJobData)
+
+	// place job in active
+	pipe.SAdd(ctx, q.keyGen.Active(), jobID)
+
+	_, err = pipe.Exec(ctx)
+	return &job, err
 }
+
+func (q *Queue) PlaceJobInWaiting(ctx context.Context, job *Job) error {
+	pipe := q.client.TxPipeline()
+
+	// update job data
+	job.UpdatedAt = time.Now()
+	job.State = JobWaiting
+
+	// Update job in hash
+	newJobData, err := job.ToJSON()
+	if err != nil {
+		return err
+	}
+	pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", newJobData)
+
+	// place job in waiting
+	score := float64(job.Priority)*1e12 + float64(time.Now().UnixNano())
+	pipe.ZAdd(ctx, q.keyGen.Waiting(), redis.Z{
+		Score:  score,
+		Member: job.ID,
+	})
+
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func (q *Queue) PlaceJobInFailed(ctx context.Context, job *Job) error {
+	pipe := q.client.TxPipeline()
+
+	// Update job in hash
+	newJobData, err := job.ToJSON()
+	if err != nil {
+		return err
+	}
+	pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", newJobData)
+
+	// place job in failed
+	pipe.SAdd(ctx, q.keyGen.Failed(), job.ID)
+
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func (q *Queue) RemoveJobFromActive(ctx context.Context, job *Job) error {
+	pipe := q.client.TxPipeline()
+
+	job.UpdatedAt = time.Now()
+	job.State = ""
+
+	// Update job in hash
+	newJobData, err := job.ToJSON()
+	if err != nil {
+		return err
+	}
+	pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", newJobData)
+
+	// remove from actuve
+	pipe.SRem(ctx, q.keyGen.Active(), job.ID)
+
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func (q *Queue) PlaceJobInCompleted(ctx context.Context, job *Job, returnData any) error {
+	pipe := q.client.TxPipeline()
+
+	job.MarkCompleted(returnData)
+
+	// Update job in hash
+	newJobData, err := job.ToJSON()
+	if err != nil {
+		return err
+	}
+	pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", newJobData)
+
+	// place in completed set
+	pipe.SAdd(ctx, q.keyGen.Completed(), job.ID)
+
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+// func (q *Queue) moveJobToState(ctx context.Context, jobID string, fromState, toState JobState) (*Job, error) {
+
+// 	const maxRetries = 5
+
+// 	for i := range maxRetries {
+// 		var job Job
+// 		// Watch makes the entire transaction atomic in redis
+// 		err := q.client.Watch(ctx, func(tx *redis.Tx) error {
+// 			jobData, err := tx.HGet(ctx, q.keyGen.Job(jobID), "data").Result()
+// 			if err != nil {
+// 				return err
+// 			}
+// 			if err := job.FromJSON([]byte(jobData)); err != nil {
+// 				return err
+// 			}
+
+// 			if job.State != fromState {
+// 				return fmt.Errorf("expected job in %s but found %s", fromState, job.State)
+// 			}
+
+// 			pipe := tx.TxPipeline()
+
+// 			// Remove from old state
+// 			if fromState != "" {
+// 				switch fromState {
+// 				case JobWaiting, JobDelayed:
+// 					pipe.ZRem(ctx, q.keyGen.State(string(fromState)), jobID)
+// 				default:
+// 					pipe.SRem(ctx, q.keyGen.State(string(fromState)), jobID)
+// 				}
+// 			}
+
+// 			// Places job in correct state set/zset
+// 			switch toState {
+// 			case JobWaiting:
+// 				score := float64(job.Priority)*1e12 + float64(time.Now().UnixNano())
+// 				pipe.ZAdd(ctx, q.keyGen.Waiting(), redis.Z{
+// 					Score:  score,
+// 					Member: job.ID,
+// 				})
+// 			case JobDelayed:
+// 				delayedUntil := time.Now().Add(job.Delay).Unix()
+// 				pipe.ZAdd(ctx, q.keyGen.Delayed(), redis.Z{
+// 					Score:  float64(delayedUntil),
+// 					Member: job.ID,
+// 				})
+// 			default:
+// 				pipe.SAdd(ctx, q.keyGen.State(string(toState)), jobID)
+// 			}
+
+// 			job.State = toState
+// 			job.UpdatedAt = time.Now()
+
+// 			// Update job in hash
+// 			newJobData, err := job.ToJSON()
+// 			if err != nil {
+// 				return err
+// 			}
+// 			pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", newJobData)
+
+// 			_, err = pipe.Exec(ctx)
+// 			return err
+// 		}, q.keyGen.Job(jobID))
+
+// 		if err == nil {
+// 			return &job, nil
+// 		}
+
+// 		if err == redis.TxFailedErr {
+// 			// Another client modified the key, retry after a small backoff
+// 			time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+// 			continue
+// 		}
+
+// 		// Any other error is fatal
+// 		return nil, err
+// 	}
+
+// 	return nil, fmt.Errorf("moveJobToState failed after %d retries due to concurrent modifications", maxRetries)
+// }
 
 // Pauses the queue (prevents new jobs from being processed)
 func (q *Queue) Pause(ctx context.Context) error {

@@ -16,18 +16,19 @@ const (
 )
 
 type Job struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Data       map[string]any `json:"data"`
-	State      JobState       `json:"state"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
-	Error      string         `json:"error,omitempty"`
-	Attempts   int            `json:"attempts"`
-	MaxRetries int            `json:"max_retries"`
-	Delay      time.Duration  `json:"delay,omitempty"`
-	Priority   int            `json:"priority"`
-	CustomID   string         `json:"custom_id,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Data        map[string]any `json:"data"`
+	State       JobState       `json:"state"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	Error       string         `json:"error,omitempty"`
+	Attempts    int            `json:"attempts"`
+	MaxRetries  int            `json:"max_retries"`
+	Delay       time.Duration  `json:"delay,omitempty"`
+	Priority    int            `json:"priority"`
+	CustomID    string         `json:"custom_id,omitempty"`
+	ReturnValue any            `json:"return_value,omitempty"`
 }
 
 type JobOptions struct {
@@ -44,7 +45,7 @@ func NewJob(name string, data map[string]any, opts *JobOptions) (*Job, error) {
 
 	if opts == nil {
 		opts = &JobOptions{
-			MaxRetries: 3,
+			MaxRetries: 0,
 			Priority:   0,
 		}
 	}
@@ -89,10 +90,11 @@ func (j *Job) MarkFailed(err error) {
 	j.UpdatedAt = time.Now()
 }
 
-func (j *Job) MarkCompleted() {
+func (j *Job) MarkCompleted(returnData any) {
 	j.State = JobCompleted
 	j.Error = ""
 	j.UpdatedAt = time.Now()
+	j.ReturnValue = returnData
 }
 
 func (j *Job) IncrementAttempts() {

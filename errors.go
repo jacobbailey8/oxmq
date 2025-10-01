@@ -17,4 +17,8 @@ var (
 
 	// ErrEmptyJobName is returned when trying to create a job without a name
 	ErrEmptyJobName = errors.New("job name cannot be empty")
+
+	ErrNoQueueProvided = errors.New("must provide a queue to create new worker")
+
+	ErrNegConcurrency = errors.New("concurrency value cannot be negative")
 )

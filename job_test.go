@@ -101,7 +101,7 @@ func TestMarkFailed(t *testing.T) {
 
 func TestMarkCompleted(t *testing.T) {
 	job := &Job{Error: "previous error"}
-	job.MarkCompleted()
+	job.MarkCompleted(struct{}{})
 
 	if job.State != JobCompleted {
 		t.Errorf("expected state %s, got %s", JobCompleted, job.State)
