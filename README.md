@@ -89,7 +89,7 @@ func main() {
 	}
 
     // Define the worker
-	worker, err := oxmq.NewWorker(queue, process, oxmq.WorkerConfig{Concurrency: 500000})
+	worker, err := oxmq.NewWorker(queue, process, oxmq.WorkerConfig{Concurrency: 100})
 
 	if err != nil {
 		fmt.Printf("Error creating worker: %s", err)
