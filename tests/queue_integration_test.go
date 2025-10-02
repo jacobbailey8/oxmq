@@ -3,17 +3,41 @@ package tests
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/jacobbailey8/oxmq"
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
 
 func setupTestQueue(t *testing.T) *oxmq.Queue {
+	godotenv.Load()
+
+	// Read environment variables
+	redisAddr := os.Getenv("REDIS_ADDR")
+	redisDB := os.Getenv("REDIS_DB")
+
+	// Provide defaults if not set
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	if redisDB == "" {
+		redisDB = "0"
+	}
+
+	// Convert REDIS_DB to int
+	db, err := strconv.Atoi(redisDB)
+	if err != nil {
+		panic("Could not parse REDIS_DB: " + err.Error())
+	}
+
+	// Create Redis client
 	client := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-		DB:   15, // test DB
+		Addr: redisAddr, // Redis server address
+		DB:   db,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -533,9 +557,30 @@ func TestQueue_PlaceJobInWaiting(t *testing.T) {
 }
 
 func TestQueue_MultipleQueues(t *testing.T) {
+	godotenv.Load()
+
+	// Read environment variables
+	redisAddr := os.Getenv("REDIS_ADDR")
+	redisDB := os.Getenv("REDIS_DB")
+
+	// Provide defaults if not set
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	if redisDB == "" {
+		redisDB = "0"
+	}
+
+	// Convert REDIS_DB to int
+	db, err := strconv.Atoi(redisDB)
+	if err != nil {
+		panic("Could not parse REDIS_DB: " + err.Error())
+	}
+
+	// Create Redis client
 	client := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
-		DB:   15,
+		Addr: redisAddr, // Redis server address
+		DB:   db,
 	})
 	ctx := context.Background()
 	client.FlushDB(ctx)
