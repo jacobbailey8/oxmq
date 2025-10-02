@@ -3,6 +3,7 @@ package oxmq
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -70,6 +71,54 @@ func (worker *Worker) Start(ctx context.Context) {
 			}
 		}
 	}(ctx)
+
+	// goroutine to poll delayed set
+	worker.wg.Add(1)
+	go func(ctx context.Context) {
+		defer worker.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// pop first one off delayed zset
+				item, err := worker.queue.client.BZPopMin(ctx, time.Second, worker.queue.keyGen.Delayed()).Result()
+				if err != nil {
+					if errors.Is(err, redis.Nil) {
+						continue
+					}
+					return
+				}
+				timeReady := time.Unix(int64(item.Score), 0) // convert score to time.Time
+				jobId := item.Z.Member.(string)
+				if time.Now().Before(timeReady) {
+					// not ready yet, put back in set
+					worker.queue.client.ZAdd(ctx, worker.queue.keyGen.Delayed(), redis.Z{
+						Score:  item.Score,
+						Member: jobId,
+					})
+				} else {
+					// job is ready, place in waiting set
+
+					// first get job from hash
+					job, err := worker.queue.GetJob(context.TODO(), jobId)
+					if err != nil {
+						continue // couldnt find job, skip it
+					}
+
+					// place job in waiting
+					if err = worker.queue.PlaceJobInWaiting(context.TODO(), job); err != nil {
+						// could not place job in waiting
+						fmt.Println("Couldnt place job in waiting after popping from delayed")
+						continue
+					}
+				}
+			}
+		}
+	}(ctx)
+
+	worker.wg.Wait()
+	close(worker.sem)
 
 }
 
