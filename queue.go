@@ -3,6 +3,7 @@ package oxmq
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jacobbailey8/oxmq/internal/redis/keys"
@@ -48,6 +49,34 @@ func (q *Queue) Add(ctx context.Context, name string, data map[string]any, opts 
 	}
 
 	return q.addJob(ctx, job)
+}
+
+// Adds an existing job to the queue
+func (q *Queue) AddJob(ctx context.Context, job *Job) (*Job, error) {
+	return q.addJob(ctx, job)
+}
+
+// Adds a slice of jobs to a queue concurrently
+func (q *Queue) AddBulk(ctx context.Context, jobs []*Job) {
+	const maxWorkers = 500
+	jobsCh := make(chan *Job, len(jobs))
+	var group sync.WaitGroup
+
+	// Start worker pool
+	for range maxWorkers {
+		group.Go(func() {
+			for job := range jobsCh {
+				q.addJob(ctx, job)
+			}
+		})
+	}
+
+	// Feed jobs into the channel
+	for _, job := range jobs {
+		jobsCh <- job
+	}
+	close(jobsCh)
+	group.Wait()
 }
 
 func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {

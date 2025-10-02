@@ -133,7 +133,7 @@ func processWaitingJob(worker *Worker, jobId string) {
 	// place job in active state, update `updated_at`
 	job, err := worker.queue.PlaceJobInActive(context.TODO(), jobId)
 	if err != nil {
-		return
+		return // TODO: if this is hit, place job back in waiting
 	}
 
 	// do user defined process function
