@@ -80,6 +80,11 @@ func (q *Queue) AddBulk(ctx context.Context, jobs []*Job) {
 }
 
 func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
+	if job.Delay > 0 {
+		job.State = JobDelayed
+	} else {
+		job.State = JobWaiting
+	}
 	jobData, err := job.ToJSON()
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal job: %w", err)
@@ -97,7 +102,6 @@ func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
 			Score:  float64(delayedUntil),
 			Member: job.ID,
 		})
-		job.State = JobDelayed
 	} else {
 		// Add to waiting list with priority: timestamp appended to priority score
 		// this will respect priority score primarily and preserve order by insertion for ties
