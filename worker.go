@@ -67,7 +67,7 @@ func (worker *Worker) Start(ctx context.Context) {
 				jobId := item.Z.Member.(string)
 				worker.sem <- struct{}{}
 				worker.wg.Add(1)
-				go processWaitingJob(ctx, worker, jobId)
+				go processWaitingJob(worker, jobId)
 			}
 		}
 	}(ctx)
@@ -82,7 +82,7 @@ func (worker *Worker) Start(ctx context.Context) {
 				return
 			default:
 				// pop first one off delayed zset
-				item, err := worker.queue.client.BZPopMin(ctx, time.Second, worker.queue.keyGen.Delayed()).Result()
+				item, err := worker.queue.client.BZPopMin(context.TODO(), time.Second, worker.queue.keyGen.Delayed()).Result()
 				if err != nil {
 					if errors.Is(err, redis.Nil) {
 						continue
@@ -93,7 +93,7 @@ func (worker *Worker) Start(ctx context.Context) {
 				jobId := item.Z.Member.(string)
 				if time.Now().Before(timeReady) {
 					// not ready yet, put back in set
-					worker.queue.client.ZAdd(ctx, worker.queue.keyGen.Delayed(), redis.Z{
+					worker.queue.client.ZAdd(context.TODO(), worker.queue.keyGen.Delayed(), redis.Z{
 						Score:  item.Score,
 						Member: jobId,
 					})
@@ -127,41 +127,31 @@ func (worker *Worker) Stop() {
 	close(worker.sem)
 }
 
-func processWaitingJob(ctx context.Context, worker *Worker, jobId string) {
+func processWaitingJob(worker *Worker, jobId string) {
 	defer worker.wg.Done()
 
-	for {
-		select {
-		case <-ctx.Done():
-			// TODO:
-			// if we canceled, place job back in waiting
-			<-worker.sem // return worker to pool
-			return
-		default:
-			// place job in active state, update `updated_at`
-			job, err := worker.queue.PlaceJobInActive(ctx, jobId)
-			if err != nil {
-				return
-			}
-
-			// do user defined process function
-			returnData, err := worker.processFn(job)
-
-			// if process function returns an error, do a handle error function
-			// that checks if it can be retried - if so increment attemts, place in waiting
-			// if attempts exhausted, place in failed
-			if err != nil {
-				handleJobErrored(ctx, worker, job, err)
-			} else {
-				// if no error returns, place in completed and store return data in hash
-				worker.queue.RemoveJobFromActive(ctx, job)
-				worker.queue.PlaceJobInCompleted(ctx, job, returnData)
-			}
-
-			<-worker.sem // return worker to pool
-			return
-		}
+	// place job in active state, update `updated_at`
+	job, err := worker.queue.PlaceJobInActive(context.TODO(), jobId)
+	if err != nil {
+		return
 	}
+
+	// do user defined process function
+	returnData, err := worker.processFn(job)
+
+	// if process function returns an error, do a handle error function
+	// that checks if it can be retried - if so increment attemts, place in waiting
+	// if attempts exhausted, place in failed
+	if err != nil {
+		handleJobErrored(context.TODO(), worker, job, err)
+	} else {
+		// if no error returns, place in completed and store return data in hash
+		worker.queue.RemoveJobFromActive(context.TODO(), job)
+		worker.queue.PlaceJobInCompleted(context.TODO(), job, returnData)
+	}
+
+	<-worker.sem // return worker to pool
+
 }
 
 func handleJobErrored(ctx context.Context, worker *Worker, job *Job, err error) error {
