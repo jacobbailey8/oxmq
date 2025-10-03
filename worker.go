@@ -142,7 +142,7 @@ func processWaitingJob(worker *Worker, jobId string) {
 	returnData, err := worker.processFn(job)
 
 	// if process function returns an error, do a handle error function
-	// that checks if it can be retried - if so increment attemts, place in waiting
+	// that checks if it can be retried - if so increment attempts, place in waiting
 	// if attempts exhausted, place in failed
 	if err != nil {
 		handleJobErrored(context.TODO(), worker, job, err)

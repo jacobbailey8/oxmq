@@ -32,7 +32,7 @@
 ## Installation
 
 ```bash
-go get github.com/jacobbailey/oxmq
+go get github.com/jacobbailey8/oxmq
 ```
 
 **Requirements:**
@@ -51,7 +51,7 @@ import (
     "time"
 
     "github.com/redis/go-redis/v9"
-    "github.com/jacobbailey/oxmq"
+    "github.com/jacobbailey8/oxmq"
 )
 
 func main() {
@@ -98,7 +98,7 @@ import (
     "syscall"
 
     "github.com/redis/go-redis/v9"
-    "github.com/jacobbailey/oxmq"
+    "github.com/jacobbailey8/oxmq"
 )
 
 func main() {
