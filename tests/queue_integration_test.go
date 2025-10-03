@@ -158,9 +158,6 @@ func TestQueue_AddBulk(t *testing.T) {
 	// Add all jobs in bulk
 	q.AddBulk(ctx, jobs)
 
-	// Give a moment for async operations to complete
-	time.Sleep(100 * time.Millisecond)
-
 	// Verify all jobs were added
 	count, err := q.Count(ctx, oxmq.JobWaiting)
 	if err != nil {

@@ -2,7 +2,10 @@ package oxmq
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type JobState string
@@ -103,5 +106,5 @@ func (j *Job) IncrementAttempts() {
 }
 
 func generateJobID(name string) string {
-	return name + ":" + time.Now().Format(time.RFC3339Nano)
+	return fmt.Sprintf("%s:%s", name, uuid.NewString())
 }

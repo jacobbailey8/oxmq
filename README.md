@@ -72,7 +72,6 @@ import (
 func main() {
 	rdb := redis.NewClient(&redis.Options{
 		Addr: "localhost:6379", // Same redis address as the queue
-		DB:   15,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

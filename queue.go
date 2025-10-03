@@ -79,6 +79,7 @@ func (q *Queue) AddBulk(ctx context.Context, jobs []*Job) {
 	group.Wait()
 }
 
+// Note: add job will place job in either waiting or delayed, no other set
 func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
 	if job.Delay > 0 {
 		job.State = JobDelayed
@@ -95,7 +96,7 @@ func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
 	// Store job data
 	pipe.HSet(ctx, q.keyGen.Job(job.ID), "data", jobData)
 
-	if job.Delay > 0 {
+	if job.State == JobDelayed {
 		// Add to delayed set with score as timestamp when job should be processed
 		delayedUntil := time.Now().Add(job.Delay).Unix()
 		pipe.ZAdd(ctx, q.keyGen.Delayed(), redis.Z{
@@ -310,6 +311,11 @@ func (q *Queue) PlaceJobInActive(ctx context.Context, jobID string) (*Job, error
 		return nil, err
 	}
 	pipe.HSet(ctx, q.keyGen.Job(jobID), "data", newJobData)
+
+	// Remove job from waiting set if it is still there.
+	// Note: it generally will not be because the worker will pop it
+	// off before processing.
+	pipe.ZRem(context.TODO(), q.KeyGen().Waiting(), jobID)
 
 	// place job in active
 	pipe.SAdd(ctx, q.keyGen.Active(), jobID)
