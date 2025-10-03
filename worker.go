@@ -53,6 +53,10 @@ func (worker *Worker) Start(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				default:
+					if paused, err := worker.queue.IsPaused(context.TODO()); paused || err != nil {
+						time.Sleep(time.Millisecond * 500)
+						continue
+					}
 					item, err := worker.queue.client.BZPopMin(ctx, time.Second, worker.queue.keyGen.Waiting()).Result()
 					if err != nil {
 						if errors.Is(err, redis.Nil) {
