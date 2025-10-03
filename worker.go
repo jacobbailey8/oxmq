@@ -21,7 +21,6 @@ type Worker struct {
 	processFn ProcessFn
 	opts      WorkerConfig
 	wg        sync.WaitGroup
-	sem       chan struct{}
 }
 
 func NewWorker(queue *Queue, processFn ProcessFn, opts WorkerConfig) (*Worker, error) {
@@ -41,36 +40,32 @@ func NewWorker(queue *Queue, processFn ProcessFn, opts WorkerConfig) (*Worker, e
 		queue:     queue,
 		processFn: processFn,
 		opts:      opts,
-		sem:       make(chan struct{}, opts.Concurrency),
 	}, nil
 }
 
 func (worker *Worker) Start(ctx context.Context) {
 
-	// goroutine to receive ready jobs from waiting list
-	worker.wg.Add(1)
-	go func(ctx context.Context) {
-		defer worker.wg.Done()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				item, err := worker.queue.client.BZPopMin(ctx, time.Second, worker.queue.keyGen.Waiting()).Result()
-				if err != nil {
-					if errors.Is(err, redis.Nil) {
-						continue
-					}
+	// goroutins to receive ready jobs from waiting list
+	for range worker.opts.Concurrency {
+		worker.wg.Go(func() {
+			for {
+				select {
+				case <-ctx.Done():
 					return
+				default:
+					item, err := worker.queue.client.BZPopMin(ctx, time.Second, worker.queue.keyGen.Waiting()).Result()
+					if err != nil {
+						if errors.Is(err, redis.Nil) {
+							continue
+						}
+						return
+					}
+					jobId := item.Z.Member.(string)
+					processWaitingJob(worker, jobId)
 				}
-				jobId := item.Z.Member.(string)
-				worker.sem <- struct{}{}
-				worker.wg.Add(1)
-				go processWaitingJob(worker, jobId)
 			}
-		}
-	}(ctx)
+		})
+	}
 
 	// goroutine to poll delayed set
 	worker.wg.Add(1)
@@ -118,17 +113,10 @@ func (worker *Worker) Start(ctx context.Context) {
 	}(ctx)
 
 	worker.wg.Wait()
-	close(worker.sem)
 
-}
-
-func (worker *Worker) Stop() {
-	worker.wg.Wait()
-	close(worker.sem)
 }
 
 func processWaitingJob(worker *Worker, jobId string) {
-	defer worker.wg.Done()
 
 	// place job in active state, update `updated_at`
 	job, err := worker.queue.PlaceJobInActive(context.TODO(), jobId)
@@ -151,9 +139,6 @@ func processWaitingJob(worker *Worker, jobId string) {
 		worker.queue.RemoveJobFromActive(context.TODO(), job)
 		worker.queue.PlaceJobInCompleted(context.TODO(), job, returnData)
 	}
-
-	<-worker.sem // return worker to pool
-
 }
 
 func handleJobErrored(ctx context.Context, worker *Worker, job *Job, err error) error {
