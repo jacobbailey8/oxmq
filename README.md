@@ -1,3 +1,9 @@
+[![Go Report Card](https://goreportcard.com/badge/github.com/jacobbailey8/oxmq)](https://goreportcard.com/report/github.com/jacobbailey8/oxmq)
+[![Build Status](https://github.com/jacobbailey8/oxmq/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/jacobbailey8/oxmq/actions/workflows/go.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jacobbailey8/oxmq.svg)](https://pkg.go.dev/github.com/jacobbailey8/oxmq)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+<!-- [![GitHub release](https://img.shields.io/github/v/release/jacobbailey8/oxmq)](https://github.com/jacobbailey8/oxmq/releases) -->
+
 # OXMQ
 
 **OXMQ** is a robust, Redis-backed job queue library for Go that provides reliable job processing with support for priorities, delays, retries, and concurrent workers. It is inspired by [BullMQ](https://github.com/taskforcesh/bullmq) in Node.js.
