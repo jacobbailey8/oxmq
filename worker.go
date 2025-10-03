@@ -136,6 +136,8 @@ func processWaitingJob(worker *Worker, jobId string) {
 		return // TODO: if this is hit, place job back in waiting
 	}
 
+	job.IncrementAttempts()
+
 	// do user defined process function
 	returnData, err := worker.processFn(job)
 
@@ -155,7 +157,6 @@ func processWaitingJob(worker *Worker, jobId string) {
 }
 
 func handleJobErrored(ctx context.Context, worker *Worker, job *Job, err error) error {
-	job.IncrementAttempts()
 	var newErr error
 	if job.IsRetryable() {
 		// remove from active

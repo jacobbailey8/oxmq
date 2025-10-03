@@ -84,7 +84,7 @@ func (j *Job) FromJSON(data []byte) error {
 }
 
 func (j *Job) IsRetryable() bool {
-	return j.Attempts < j.MaxRetries
+	return j.Attempts <= j.MaxRetries
 }
 
 func (j *Job) MarkFailed(err error) {

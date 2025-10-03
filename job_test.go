@@ -218,10 +218,11 @@ func TestIsRetryable(t *testing.T) {
 	}{
 		{"no attempts, retries available", 0, 3, true},
 		{"some attempts, retries available", 1, 3, true},
-		{"at max retries", 3, 3, false},
-		{"exceeded max retries", 4, 3, false},
-		{"no retries allowed", 0, 0, false},
-		{"one attempt with one retry", 1, 1, false},
+		{"one more retrty", 3, 3, true},
+		{"attempts equal max retries + 1", 4, 3, false},
+		{"attempts exceeded max retries + 1", 5, 3, false},
+		{"no retries allowed", 1, 0, false},
+		{"one attempt with one retry", 1, 1, true},
 	}
 
 	for _, tt := range tests {
