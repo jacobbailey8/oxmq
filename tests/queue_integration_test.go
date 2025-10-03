@@ -600,3 +600,249 @@ func TestQueue_MultipleQueues(t *testing.T) {
 		t.Errorf("expected queue-2 to have 1 job, got %d", count2)
 	}
 }
+
+func TestQueue_CustomID(t *testing.T) {
+	q := setupTestQueue(t)
+	ctx := context.Background()
+
+	customID := "my-custom-id-123"
+	job, err := q.Add(ctx, "custom-job", map[string]any{"data": "test"}, &oxmq.JobOptions{
+		CustomID: customID,
+	})
+	if err != nil {
+		t.Fatalf("failed to add job with custom ID: %v", err)
+	}
+
+	if job.ID != customID {
+		t.Errorf("expected job ID to be %s, got %s", customID, job.ID)
+	}
+	if job.CustomID != customID {
+		t.Errorf("expected custom ID to be %s, got %s", customID, job.CustomID)
+	}
+
+	// Verify we can fetch it by custom ID
+	fetched, err := q.GetJob(ctx, customID)
+	if err != nil {
+		t.Fatalf("failed to get job by custom ID: %v", err)
+	}
+
+	if fetched.Name != "custom-job" {
+		t.Errorf("expected name custom-job, got %s", fetched.Name)
+	}
+}
+
+func TestQueue_DedupDrop(t *testing.T) {
+	q := setupTestQueue(t)
+	ctx := context.Background()
+
+	customID := "dedup-drop-test"
+
+	// Add first job with dedup=drop
+	job1, err := q.Add(ctx, "test-job", map[string]any{"version": 1}, &oxmq.JobOptions{
+		CustomID: customID,
+		Dedup:    oxmq.DedupDrop,
+	})
+	if err != nil {
+		t.Fatalf("failed to add first job: %v", err)
+	}
+
+	// Try to add second job with same custom ID
+	job2, err := q.Add(ctx, "test-job", map[string]any{"version": 2}, &oxmq.JobOptions{
+		CustomID: customID,
+		Dedup:    oxmq.DedupDrop,
+	})
+	if err != nil {
+		t.Fatalf("failed to add second job: %v", err)
+	}
+
+	// job2 should be the same as job1 (original returned)
+	if job2.ID != job1.ID {
+		t.Errorf("expected same job ID, got %s and %s", job1.ID, job2.ID)
+	}
+
+	// Verify data is still from first job
+	fetched, err := q.GetJob(ctx, customID)
+	if err != nil {
+		t.Fatalf("failed to get job: %v", err)
+	}
+
+	if fetched.Data["version"] != float64(1) { // JSON unmarshals numbers as float64
+		t.Errorf("expected version 1 (original), got %v", fetched.Data["version"])
+	}
+
+	// Should only have one job in waiting
+	count, _ := q.Count(ctx, oxmq.JobWaiting)
+	if count != 1 {
+		t.Errorf("expected 1 job in waiting, got %d", count)
+	}
+}
+
+func TestQueue_DedupAdd(t *testing.T) {
+	q := setupTestQueue(t)
+	ctx := context.Background()
+
+	customID := "dedup-add-test"
+
+	// Add first job with dedup=add
+	job1, err := q.Add(ctx, "test-job", map[string]any{"version": 1}, &oxmq.JobOptions{
+		CustomID: customID,
+		Dedup:    oxmq.DedupAdd,
+	})
+	if err != nil {
+		t.Fatalf("failed to add first job: %v", err)
+	}
+
+	// Try to add second job with same custom ID and dedup=add
+	job2, err := q.Add(ctx, "test-job", map[string]any{"version": 2}, &oxmq.JobOptions{
+		CustomID: customID,
+		Dedup:    oxmq.DedupAdd,
+	})
+	if err != nil {
+		t.Fatalf("failed to add second job: %v", err)
+	}
+
+	// job2 should have a different ID (new one generated)
+	if job2.ID == job1.ID {
+		t.Errorf("expected different job IDs, both are %s", job1.ID)
+	}
+
+	// Both jobs should exist
+	_, err = q.GetJob(ctx, job1.ID)
+	if err != nil {
+		t.Errorf("first job should still exist: %v", err)
+	}
+
+	_, err = q.GetJob(ctx, job2.ID)
+	if err != nil {
+		t.Errorf("second job should exist: %v", err)
+	}
+
+	// Should have two jobs in waiting
+	count, _ := q.Count(ctx, oxmq.JobWaiting)
+	if count != 2 {
+		t.Errorf("expected 2 jobs in waiting, got %d", count)
+	}
+}
+func TestQueue_DedupUpdate(t *testing.T) {
+	q := setupTestQueue(t)
+	ctx := context.Background()
+
+	customID := "dedup-update-test"
+
+	// Add first job with dedup=update (default)
+	job1, err := q.Add(ctx, "test-job", map[string]any{"version": 1}, &oxmq.JobOptions{
+		CustomID: customID,
+		Dedup:    oxmq.DedupUpdate,
+		Priority: 5,
+	})
+	if err != nil {
+		t.Fatalf("failed to add first job: %v", err)
+	}
+
+	// Add second job with same custom ID - should update
+	job2, err := q.Add(ctx, "test-job", map[string]any{"version": 2}, &oxmq.JobOptions{
+		CustomID: customID,
+		Dedup:    oxmq.DedupUpdate,
+		Priority: 10,
+	})
+	if err != nil {
+		t.Fatalf("failed to add second job: %v", err)
+	}
+
+	// IDs should be the same
+	if job2.ID != job1.ID {
+		t.Errorf("expected same job ID, got %s and %s", job1.ID, job2.ID)
+	}
+
+	// Verify data is updated
+	fetched, err := q.GetJob(ctx, customID)
+	if err != nil {
+		t.Fatalf("failed to get job: %v", err)
+	}
+
+	if fetched.Data["version"] != float64(2) {
+		t.Errorf("expected version 2 (updated), got %v", fetched.Data["version"])
+	}
+
+	if fetched.Priority != 10 {
+		t.Errorf("expected priority 10, got %d", fetched.Priority)
+	}
+
+	// Should only have one job in waiting
+	count, _ := q.Count(ctx, oxmq.JobWaiting)
+	if count != 1 {
+		t.Errorf("expected 1 job in waiting, got %d", count)
+	}
+}
+
+func TestQueue_DedupWithoutCustomID(t *testing.T) {
+	q := setupTestQueue(t)
+	ctx := context.Background()
+
+	// Add jobs without custom ID - dedup should not apply
+	job1, err := q.Add(ctx, "test-job", map[string]any{"data": "first"}, &oxmq.JobOptions{
+		Dedup: oxmq.DedupDrop,
+	})
+	if err != nil {
+		t.Fatalf("failed to add first job: %v", err)
+	}
+
+	job2, err := q.Add(ctx, "test-job", map[string]any{"data": "second"}, &oxmq.JobOptions{
+		Dedup: oxmq.DedupDrop,
+	})
+	if err != nil {
+		t.Fatalf("failed to add second job: %v", err)
+	}
+
+	// Should have different IDs since no custom ID
+	if job1.ID == job2.ID {
+		t.Errorf("expected different IDs without custom ID, both are %s", job1.ID)
+	}
+
+	// Should have two jobs
+	count, _ := q.Count(ctx, oxmq.JobWaiting)
+	if count != 2 {
+		t.Errorf("expected 2 jobs without custom ID dedup, got %d", count)
+	}
+}
+
+func TestQueue_DedupWithDelayedJobs(t *testing.T) {
+	q := setupTestQueue(t)
+	ctx := context.Background()
+
+	customID := "delayed-dedup-test"
+
+	// Add delayed job
+	job1, err := q.Add(ctx, "test-job", map[string]any{"version": 1}, &oxmq.JobOptions{
+		CustomID: customID,
+		Delay:    2 * time.Second,
+		Dedup:    oxmq.DedupDrop,
+	})
+	if err != nil {
+		t.Fatalf("failed to add delayed job: %v", err)
+	}
+
+	if job1.State != oxmq.JobDelayed {
+		t.Errorf("expected job to be delayed, got %s", job1.State)
+	}
+
+	// Try to add another with same custom ID
+	job2, err := q.Add(ctx, "test-job", map[string]any{"version": 2}, &oxmq.JobOptions{
+		CustomID: customID,
+		Dedup:    oxmq.DedupDrop,
+	})
+	if err != nil {
+		t.Fatalf("failed to add second job: %v", err)
+	}
+
+	// Should return original delayed job
+	if job2.ID != job1.ID {
+		t.Errorf("expected same job ID, got %s and %s", job1.ID, job2.ID)
+	}
+
+	// Should only have one delayed job
+	count, _ := q.Count(ctx, oxmq.JobDelayed)
+	if count != 1 {
+		t.Errorf("expected 1 delayed job, got %d", count)
+	}
+}

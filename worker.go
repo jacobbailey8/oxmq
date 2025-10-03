@@ -57,7 +57,7 @@ func (worker *Worker) Start(ctx context.Context) {
 						time.Sleep(time.Millisecond * 500)
 						continue
 					}
-					item, err := worker.queue.client.BZPopMin(ctx, time.Second, worker.queue.keyGen.Waiting()).Result()
+					item, err := worker.queue.client.BZPopMin(context.TODO(), time.Second, worker.queue.keyGen.Waiting()).Result()
 					if err != nil {
 						if errors.Is(err, redis.Nil) {
 							continue
@@ -72,9 +72,7 @@ func (worker *Worker) Start(ctx context.Context) {
 	}
 
 	// goroutine to poll delayed set
-	worker.wg.Add(1)
-	go func(ctx context.Context) {
-		defer worker.wg.Done()
+	worker.wg.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -114,7 +112,7 @@ func (worker *Worker) Start(ctx context.Context) {
 				}
 			}
 		}
-	}(ctx)
+	})
 
 	worker.wg.Wait()
 

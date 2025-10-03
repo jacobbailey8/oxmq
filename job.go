@@ -9,6 +9,7 @@ import (
 )
 
 type JobState string
+type JobDedup string
 
 const (
 	JobWaiting   JobState = "waiting"
@@ -16,6 +17,12 @@ const (
 	JobCompleted JobState = "completed"
 	JobFailed    JobState = "failed"
 	JobDelayed   JobState = "delayed"
+)
+
+const (
+	DedupAdd    JobDedup = "add"    // adds job to end of queue by generating a new primary ID
+	DedupUpdate JobDedup = "update" // updates the existing job to the new provided one
+	DedupDrop   JobDedup = "drop"   // does not add the new job
 )
 
 type Job struct {
@@ -32,6 +39,7 @@ type Job struct {
 	Priority    int            `json:"priority"`
 	CustomID    string         `json:"custom_id,omitempty"`
 	ReturnValue any            `json:"return_value,omitempty"`
+	Dedup       JobDedup       `json:"dedup,omitempty"`
 }
 
 type JobOptions struct {
@@ -39,6 +47,7 @@ type JobOptions struct {
 	Delay      time.Duration
 	Priority   int
 	CustomID   string
+	Dedup      JobDedup
 }
 
 func NewJob(name string, data map[string]any, opts *JobOptions) (*Job, error) {
@@ -50,6 +59,7 @@ func NewJob(name string, data map[string]any, opts *JobOptions) (*Job, error) {
 		opts = &JobOptions{
 			MaxRetries: 0,
 			Priority:   0,
+			Dedup:      "update",
 		}
 	}
 
@@ -72,6 +82,7 @@ func NewJob(name string, data map[string]any, opts *JobOptions) (*Job, error) {
 		Delay:      opts.Delay,
 		Priority:   opts.Priority,
 		CustomID:   opts.CustomID,
+		Dedup:      opts.Dedup,
 	}, nil
 }
 

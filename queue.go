@@ -41,6 +41,8 @@ func (q *Queue) KeyGen() *keys.KeyGenerator {
 }
 
 // Adds a new job to the queue based on explicit parameters
+// if dedup occurs and is set to drop on the original job,
+// the original job will be retruned.
 func (q *Queue) Add(ctx context.Context, name string, data map[string]any, opts *JobOptions) (*Job, error) {
 
 	job, err := NewJob(name, data, opts)
@@ -52,6 +54,8 @@ func (q *Queue) Add(ctx context.Context, name string, data map[string]any, opts 
 }
 
 // Adds an existing job to the queue
+// if dedup occurs and is set to drop on the original job,
+// the original job will be returned.
 func (q *Queue) AddJob(ctx context.Context, job *Job) (*Job, error) {
 	return q.addJob(ctx, job)
 }
@@ -62,6 +66,14 @@ func (q *Queue) AddBulk(ctx context.Context, jobs []*Job) {
 	jobsCh := make(chan *Job, len(jobs))
 	var group sync.WaitGroup
 
+	// Feed jobs into the channel
+	group.Go(func() {
+		for _, job := range jobs {
+			jobsCh <- job
+		}
+		close(jobsCh)
+	})
+
 	// Start worker pool
 	for range maxWorkers {
 		group.Go(func() {
@@ -71,16 +83,28 @@ func (q *Queue) AddBulk(ctx context.Context, jobs []*Job) {
 		})
 	}
 
-	// Feed jobs into the channel
-	for _, job := range jobs {
-		jobsCh <- job
-	}
-	close(jobsCh)
 	group.Wait()
 }
 
 // Note: add job will place job in either waiting or delayed, no other set
 func (q *Queue) addJob(ctx context.Context, job *Job) (*Job, error) {
+
+	// first check if the job already exists
+	originalJob, err := q.GetJob(ctx, job.ID)
+
+	if err != ErrJobNotFound { // job already in hash
+		switch originalJob.Dedup {
+		case DedupDrop:
+			// do not add the new job and instead return the existing job
+			return originalJob, nil
+		case DedupAdd:
+			// create a new id for the job so it can be added to the queue
+			job.ID = generateJobID(job.Name)
+		default:
+			// for updates continue as normal
+		}
+	}
+
 	if job.Delay > 0 {
 		job.State = JobDelayed
 	} else {
@@ -265,6 +289,10 @@ func (q *Queue) Clean(ctx context.Context, maxAge time.Duration, state JobState,
 	return cleaned, nil
 }
 
+// Completely removes a job from the queue
+// TODO: Should probably wrap the functionality in a redis watch
+// in case a worker moves the state of a job in between the reading of the
+// job and the removal of it
 func (q *Queue) RemoveJob(ctx context.Context, jobID string) error {
 	job, err := q.GetJob(ctx, jobID)
 	if err != nil {
