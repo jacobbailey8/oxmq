@@ -261,7 +261,8 @@ func TestWorkerJobFailure(t *testing.T) {
 	assert.Equal(t, 3, failedJobs[0].Attempts)
 }
 
-// TODO: Make this test pass
+// TODO: Make this test pass - job is being processed just barely before it should be
+// based on the delay set
 // TestWorkerDelayedJobs tests that delayed jobs are processed after their delay
 // func TestWorkerDelayedJobs(t *testing.T) {
 // 	_, queue, cleanup := setupTestWorkerQueue(t)

@@ -33,3 +33,6 @@ go.work.sum
 
 # Playground binaries
 /cmd/playground/
+
+# Mock README
+/mock
