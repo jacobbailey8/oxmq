@@ -45,7 +45,7 @@ func NewWorker(queue *Queue, processFn ProcessFn, opts WorkerConfig) (*Worker, e
 
 func (worker *Worker) Start(ctx context.Context) {
 
-	// goroutins to receive ready jobs from waiting list
+	// goroutines to receive ready jobs from waiting list
 	for range worker.opts.Concurrency {
 		worker.wg.Go(func() {
 			for {
