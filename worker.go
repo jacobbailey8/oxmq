@@ -57,7 +57,7 @@ func (worker *Worker) Start(ctx context.Context) {
 						time.Sleep(time.Millisecond * 500)
 						continue
 					}
-					item, err := worker.queue.client.BZPopMin(context.TODO(), time.Second, worker.queue.keyGen.Waiting()).Result()
+					item, err := worker.queue.client.BZPopMin(context.TODO(), time.Minute*5, worker.queue.keyGen.Waiting()).Result()
 					if err != nil {
 						if errors.Is(err, redis.Nil) {
 							continue
