@@ -11,7 +11,11 @@ import (
 )
 
 type WorkerConfig struct {
-	Concurrency int
+	Concurrency  int
+	PollInterval time.Duration // how often to poll an empty queue
+	// (when a poll results in no job, how long until we poll again)
+	PollDelayedInterval time.Duration // how often to poll the delayed set
+	// since zero would block indefinitely to redis, a default (0) gets set to 1 second as a reasonable default
 }
 
 type ProcessFn func(*Job) (any, error)
@@ -36,6 +40,14 @@ func NewWorker(queue *Queue, processFn ProcessFn, opts WorkerConfig) (*Worker, e
 		opts.Concurrency = 1
 	}
 
+	if opts.PollInterval == 0 {
+		opts.PollInterval = time.Second
+	}
+
+	if opts.PollDelayedInterval == 0 {
+		opts.PollDelayedInterval = time.Second
+	}
+
 	return &Worker{
 		queue:     queue,
 		processFn: processFn,
@@ -57,7 +69,7 @@ func (worker *Worker) Start(ctx context.Context) {
 						time.Sleep(time.Millisecond * 500)
 						continue
 					}
-					item, err := worker.queue.client.BZPopMin(context.TODO(), time.Minute*5, worker.queue.keyGen.Waiting()).Result()
+					item, err := worker.queue.client.BZPopMin(ctx, worker.opts.PollInterval, worker.queue.keyGen.Waiting()).Result()
 					if err != nil {
 						if errors.Is(err, redis.Nil) {
 							continue
@@ -79,7 +91,7 @@ func (worker *Worker) Start(ctx context.Context) {
 				return
 			default:
 				// pop first one off delayed zset
-				item, err := worker.queue.client.BZPopMin(context.TODO(), time.Minute*5, worker.queue.keyGen.Delayed()).Result()
+				item, err := worker.queue.client.BZPopMin(context.TODO(), worker.opts.PollDelayedInterval, worker.queue.keyGen.Delayed()).Result()
 				if err != nil {
 					if errors.Is(err, redis.Nil) {
 						continue

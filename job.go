@@ -33,10 +33,10 @@ type Job struct {
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	Error       string         `json:"error,omitempty"`
-	Attempts    int            `json:"attempts"`
-	MaxRetries  int            `json:"max_retries"`
+	Attempts    int            `json:"attempts,omitempty"`
+	MaxRetries  int            `json:"max_retries,omitempty"`
 	Delay       time.Duration  `json:"delay,omitempty"`
-	Priority    int            `json:"priority"`
+	Priority    int            `json:"priority,omitempty"`
 	CustomID    string         `json:"custom_id,omitempty"`
 	ReturnValue any            `json:"return_value,omitempty"`
 	Dedup       JobDedup       `json:"dedup,omitempty"`
